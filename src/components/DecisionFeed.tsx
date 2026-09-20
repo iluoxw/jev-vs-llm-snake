@@ -5,6 +5,7 @@ import { ARROW, DIR_LABEL, formatUsd, pct } from "./StatusCard.tsx";
 
 const BADGE: Record<Source, { label: string; tone: Tone }> = {
   jev: { label: "采用", tone: "ok" },
+  laya: { label: "采用", tone: "ok" },
   llm: { label: "采用", tone: "ok" },
   forced: { label: "强制", tone: "neutral" },
   late: { label: "超时", tone: "warn" },
@@ -16,6 +17,7 @@ const clock = (at: number) => new Date(at).toLocaleTimeString("zh-CN", { hour12:
 function describe(e: HistoryEntry) {
   switch (e.source) {
     case "jev":
+    case "laya":
     case "llm":
       return [
         `${e.latencyMs} ms`,

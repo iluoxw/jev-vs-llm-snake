@@ -1,20 +1,23 @@
 import { useEffect, useRef } from "react";
 import { DELTA, type Dir, type GameState, type Point, samePoint } from "../game/engine.ts";
+import type { Player } from "../game/players.ts";
 
 type Rgb = [number, number, number];
 
 const COLORS = {
   bg: "#060c18",
   grid: "rgba(125, 165, 225, 0.07)",
-  head: [165, 243, 252] as Rgb,
-  neck: [45, 212, 191] as Rgb,
-  tail: [13, 116, 144] as Rgb,
   deadHead: [148, 163, 184] as Rgb,
   deadNeck: [100, 116, 139] as Rgb,
   deadTail: [51, 65, 85] as Rgb,
   food: "#fb7185",
-  pick: "#67e8f9",
   eye: "#04121c",
+};
+
+const THEME: Record<Player, { head: Rgb; neck: Rgb; tail: Rgb; pick: string }> = {
+  jev: { head: [165, 243, 252], neck: [45, 212, 191], tail: [13, 116, 144], pick: "#5eead4" },
+  laya: { head: [237, 233, 254], neck: [167, 139, 250], tail: [91, 33, 182], pick: "#c4b5fd" },
+  llm: { head: [186, 230, 253], neck: [56, 189, 248], tail: [3, 105, 161], pick: "#7dd3fc" },
 };
 
 const rgb = (c: Rgb) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
@@ -46,14 +49,15 @@ interface Props {
   game: GameState;
   highlight: Dir | null;
   tickMs: number;
+  player: Player;
 }
 
-export function Board({ game, highlight, tickMs }: Props) {
+export function Board({ game, highlight, tickMs, player }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
 
   // Latest props for the animation loop, which outlives individual renders.
-  const live = useRef({ game, highlight, tickMs });
+  const live = useRef({ game, highlight, tickMs, player });
   const motion = useRef<Motion | null>(null);
 
   const previous = live.current.game;
@@ -65,7 +69,7 @@ export function Board({ game, highlight, tickMs }: Props) {
       samePoint(game.snake[1], previous.snake[0]);
     motion.current = stepped ? { from: previous.snake, startedAt: performance.now() } : null;
   }
-  live.current = { game, highlight, tickMs };
+  live.current = { game, highlight, tickMs, player };
 
   useEffect(() => {
     const el = canvas.current;
@@ -75,7 +79,8 @@ export function Board({ game, highlight, tickMs }: Props) {
     let frame = 0;
 
     const draw = (now: number) => {
-      const { game, highlight, tickMs } = live.current;
+      const { game, highlight, tickMs, player } = live.current;
+      const theme = THEME[player];
       const side = Math.max(1, Math.min(box.clientWidth, box.clientHeight));
       const cell = side / game.cols;
       const width = side;
@@ -116,12 +121,12 @@ export function Board({ game, highlight, tickMs }: Props) {
         ctx.restore();
       }
 
-      // Outline the cell the LLM just picked.
+      // Outline the cell just picked.
       if (highlight && game.alive) {
         const d = DELTA[highlight];
         const head = game.snake[0];
         ctx.save();
-        ctx.strokeStyle = COLORS.pick;
+        ctx.strokeStyle = theme.pick;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([4, 4]);
         ctx.lineDashOffset = -now / 60;
@@ -136,7 +141,7 @@ export function Board({ game, highlight, tickMs }: Props) {
       const path = bodyPath(game.snake, motion.current, Math.max(0, t));
       const [headColor, neckColor, tailColor] = dead
         ? [COLORS.deadHead, COLORS.deadNeck, COLORS.deadTail]
-        : [COLORS.head, COLORS.neck, COLORS.tail];
+        : [theme.head, theme.neck, theme.tail];
 
       // Butt-capped segments shaded end to end read as one continuous gradient; discs round off
       // the corners and the tail, where a butt cap would leave a notch.

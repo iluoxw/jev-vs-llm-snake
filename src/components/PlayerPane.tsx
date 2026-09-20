@@ -12,7 +12,15 @@ const STATE_BADGE = {
   over: { label: "结束", tone: "danger" as const },
 };
 
-export function PlayerPane({ player, snapshot }: { player: Player; snapshot: Snapshot }) {
+export function PlayerPane({
+  player,
+  snapshot,
+  ready = null,
+}: {
+  player: Player;
+  snapshot: Snapshot;
+  ready?: boolean | null;
+}) {
   const meta = PLAYER_META[player];
   const { game, status, tickMs, tickStartedAt, decision, history } = snapshot;
   const running = status === "running";
@@ -30,13 +38,13 @@ export function PlayerPane({ player, snapshot }: { player: Player; snapshot: Sna
               <h2>{meta.label}</h2>
             </div>
             <DeadlineBar running={running} tickStartedAt={tickStartedAt} tickMs={tickMs} missed={missed} compact />
-            <Badge tone={state.tone} live={running}>
-              {state.label}
+            <Badge tone={ready === false ? "warn" : state.tone} live={running && ready !== false}>
+              {ready === false ? meta.offline : state.label}
             </Badge>
           </header>
 
           <div className="board-stage">
-            <Board game={game} highlight={highlight} tickMs={tickMs} />
+            <Board game={game} highlight={highlight} tickMs={tickMs} player={player} />
             {status === "over" && (
               <div className="overlay">
                 <div className="eyebrow">{game.won ? "棋盘已满" : "游戏结束"}</div>
@@ -50,7 +58,7 @@ export function PlayerPane({ player, snapshot }: { player: Player; snapshot: Sna
             )}
           </div>
 
-          <PlayerHud snapshot={snapshot} />
+          <PlayerHud snapshot={snapshot} ready={ready} />
         </div>
       </section>
     </section>

@@ -22,8 +22,9 @@ const jevOutputUsd = Number(process.env.TYPESAFE_OUTPUT_USD_PER_MTIME ?? 0);
 const completionsUrl = resolveCompletionsUrl(openaiBase);
 
 const typesafe = jevKey ? new TypeSafeClient() : null;
+const layaUrl = (process.env.LAYA_URL ?? "http://127.0.0.1:8790").replace(/\/+$/, "");
 
-if (!jevKey)   console.warn("未配置 TYPESAFE_API_KEY，/api/decide/jev 将返回 503。");
+if (!jevKey) console.warn("未配置 TYPESAFE_API_KEY，/api/decide/jev 将返回 503。");
 if (!openaiKey || !openaiModel) console.warn("未配置 OPENAI_API_KEY / OPENAI_MODEL，/api/decide/llm 将返回 503。");
 
 const app = new Hono();
@@ -77,30 +78,46 @@ function readStrategy(body: unknown): string {
     : "";
 }
 
-app.get("/api/health", (c) =>
+function prepareDecide(body: unknown) {
+  const game = parseGame(body);
+  if (!game) return { ok: false as const, error: "棋盘状态无效" };
+  const facts = analyze(game);
+  if (facts.length < 2) return { ok: false as const, error: "合法方向不足两个，由代码决定" };
+  try {
+    return {
+      ok: true as const,
+      legal: facts.map((f) => f.dir),
+      request: buildRequest(game, facts, readStrategy(body)),
+    };
+  } catch {
+    return { ok: false as const, error: "棋盘状态无效" };
+  }
+}
+
+async function layaReady() {
+  try {
+    const res = await fetch(`${layaUrl}/health`, { signal: AbortSignal.timeout(400) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+app.get("/api/health", async (c) =>
   c.json({
     ok: true,
     jev: Boolean(jevKey),
     llm: Boolean(openaiKey && openaiModel),
+    laya: await layaReady(),
   }),
 );
 
 app.post("/api/decide/jev", async (c) => {
   if (!typesafe) return c.json({ error: "未配置 TYPESAFE_API_KEY" }, 503);
   const body = await c.req.json().catch(() => null);
-  const game = parseGame(body);
-  if (!game) return c.json({ error: "棋盘状态无效" }, 400);
-
-  const facts = analyze(game);
-  if (facts.length < 2) return c.json({ error: "合法方向不足两个，由代码决定" }, 400);
-  const legal = facts.map((f) => f.dir);
-
-  let request;
-  try {
-    request = buildRequest(game, facts, readStrategy(body));
-  } catch {
-    return c.json({ error: "棋盘状态无效" }, 400);
-  }
+  const prepared = prepareDecide(body);
+  if (!prepared.ok) return c.json({ error: prepared.error }, 400);
+  const { legal, request } = prepared;
   const started = performance.now();
   try {
     const res = await typesafe.systemOne(
@@ -136,19 +153,9 @@ app.post("/api/decide/jev", async (c) => {
 app.post("/api/decide/llm", async (c) => {
   if (!openaiKey || !openaiModel) return c.json({ error: "未配置 OPENAI_API_KEY / OPENAI_MODEL" }, 503);
   const body = await c.req.json().catch(() => null);
-  const game = parseGame(body);
-  if (!game) return c.json({ error: "棋盘状态无效" }, 400);
-
-  const facts = analyze(game);
-  if (facts.length < 2) return c.json({ error: "合法方向不足两个，由代码决定" }, 400);
-  const legal = facts.map((f) => f.dir);
-
-  let request;
-  try {
-    request = buildRequest(game, facts, readStrategy(body));
-  } catch {
-    return c.json({ error: "棋盘状态无效" }, 400);
-  }
+  const prepared = prepareDecide(body);
+  if (!prepared.ok) return c.json({ error: prepared.error }, 400);
+  const { legal, request } = prepared;
   const started = performance.now();
   try {
     const res = await fetch(completionsUrl, {
@@ -204,6 +211,62 @@ app.post("/api/decide/llm", async (c) => {
   }
 });
 
+app.post("/api/decide/laya", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const prepared = prepareDecide(body);
+  if (!prepared.ok) return c.json({ error: prepared.error }, 400);
+  const { legal, request } = prepared;
+  const started = performance.now();
+  try {
+    const res = await fetch(`${layaUrl}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        state: request.state,
+        instructions: request.instructions,
+        criteria: request.criteria,
+      }),
+      signal: mergeSignals(c.req.raw.signal, 5000),
+    });
+    const payload = (await res.json().catch(() => null)) as {
+      detail?: string;
+      error?: string;
+      choice?: unknown;
+      probabilities?: Partial<Record<Dir, number>>;
+      confidence?: number | null;
+      model?: string;
+      upstreamMs?: number;
+    } | null;
+    if (res.status === 404 || res.status === 502 || res.status === 503) {
+      return c.json({ error: "未启动 Laya 服务" }, 503);
+    }
+    if (!res.ok) {
+      throw new Error(payload?.detail ?? payload?.error ?? `upstream HTTP ${res.status}`);
+    }
+    const chosen = typeof payload?.choice === "string" ? (payload.choice as Dir) : null;
+    if (!chosen || !legal.includes(chosen)) return c.json({ error: "返回了非法方向" }, 502);
+    const result: DecideResult = {
+      choice: chosen,
+      probabilities: payload?.probabilities ?? {},
+      confidence: typeof payload?.confidence === "number" ? payload.confidence : null,
+      model: typeof payload?.model === "string" ? payload.model : "laya",
+      upstreamMs: Math.round(performance.now() - started),
+      inputTokens: null,
+      outputTokens: null,
+      estimatedUsd: 0,
+    };
+    return c.json(result);
+  } catch (err) {
+    if (c.req.raw.signal.aborted) return c.body(null, 499 as never);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[decide/laya]", message);
+    if (message.includes("fetch") || message.includes("ECONNREFUSED")) {
+      return c.json({ error: "未启动 Laya 服务" }, 503);
+    }
+    return c.json({ error: "Laya 决策失败" }, 502);
+  }
+});
+
 app.post("/api/decide", (c) => {
   const url = new URL(c.req.url);
   url.pathname = "/api/decide/llm";
@@ -212,5 +275,7 @@ app.post("/api/decide", (c) => {
 
 const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
-  console.log(`jev-vs-llm-snake proxy listening on http://127.0.0.1:${port} · llm ${completionsUrl} · model ${openaiModel ?? "(unset)"}`);
+  console.log(
+    `jev-vs-llm-snake proxy listening on http://127.0.0.1:${port} · llm ${completionsUrl} · model ${openaiModel ?? "(unset)"} · laya ${layaUrl}`,
+  );
 });

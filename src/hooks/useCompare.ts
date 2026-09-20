@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { decideJev, decideLlm } from "../decide/client.ts";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { decideJev, decideLaya, decideLlm } from "../decide/client.ts";
 import { GameController } from "../game/controller.ts";
+import type { Player } from "../game/players.ts";
 
 function seedFromUrl(): number | undefined {
   const raw = new URLSearchParams(window.location.search).get("seed");
@@ -10,23 +11,26 @@ function seedFromUrl(): number | undefined {
 }
 
 export function useCompare() {
-  const [pair] = useState(() => {
+  const [trio] = useState(() => {
     const seed = seedFromUrl() ?? Math.floor(Math.random() * 2 ** 31);
     return {
       jev: new GameController({ decide: decideJev, player: "jev", seed }),
+      laya: new GameController({ decide: decideLaya, player: "laya", seed }),
       llm: new GameController({ decide: decideLlm, player: "llm", seed }),
     };
   });
 
-  const jev = useSyncExternalStore(pair.jev.subscribe, pair.jev.getSnapshot);
-  const llm = useSyncExternalStore(pair.llm.subscribe, pair.llm.getSnapshot);
+  const jev = useSyncExternalStore(trio.jev.subscribe, trio.jev.getSnapshot);
+  const laya = useSyncExternalStore(trio.laya.subscribe, trio.laya.getSnapshot);
+  const llm = useSyncExternalStore(trio.llm.subscribe, trio.llm.getSnapshot);
 
   useEffect(
     () => () => {
-      pair.jev.pause();
-      pair.llm.pause();
+      trio.jev.pause();
+      trio.laya.pause();
+      trio.llm.pause();
     },
-    [pair],
+    [trio],
   );
 
   useEffect(() => {
@@ -35,34 +39,56 @@ export function useCompare() {
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }, [jev.seed]);
 
+  const logged = useRef<Record<Player, number>>({ jev: 0, laya: 0, llm: 0 });
+  useEffect(() => {
+    logged.current = { jev: 0, laya: 0, llm: 0 };
+  }, [jev.seed]);
+  useEffect(() => {
+    for (const snap of [jev, laya, llm]) {
+      const e = snap.history[0];
+      if (!e || e.step <= logged.current[snap.player]) continue;
+      logged.current[snap.player] = e.step;
+      console.log("[compare]", {
+        seed: snap.seed,
+        player: snap.player,
+        step: e.step,
+        boardKey: e.boardKey,
+        dir: e.dir,
+        source: e.source,
+        judged: e.judged,
+        oracle: e.oracle,
+        oracleMatch: e.oracleMatch,
+        latencyMs: e.latencyMs,
+        facts: e.facts,
+      });
+    }
+  }, [jev, laya, llm]);
+
   const session = useMemo(() => {
-    const applyBoth = (fn: (c: GameController) => void) => {
-      fn(pair.jev);
-      fn(pair.llm);
+    const applyAll = (fn: (c: GameController) => void) => {
+      fn(trio.jev);
+      fn(trio.laya);
+      fn(trio.llm);
     };
     return {
-      setStrategy: (strategy: string) => applyBoth((c) => c.setStrategy(strategy)),
-      setTickMs: (tickMs: number) => applyBoth((c) => c.setTickMs(tickMs)),
-      setSeed: (seed: number) => applyBoth((c) => c.setSeed(seed)),
+      setStrategy: (strategy: string) => applyAll((c) => c.setStrategy(strategy)),
+      setTickMs: (tickMs: number) => applyAll((c) => c.setTickMs(tickMs)),
+      setSeed: (seed: number) => applyAll((c) => c.setSeed(seed)),
       start: () => {
-        const j = pair.jev.getSnapshot();
-        const l = pair.llm.getSnapshot();
-        if (j.status === "over" || l.status === "over") {
-          const next = (j.seed + 1) | 0;
-          pair.jev.setSeed(next);
-          pair.llm.setSeed(next);
+        const snapshots = [trio.jev, trio.laya, trio.llm].map((c) => c.getSnapshot());
+        if (snapshots.some((s) => s.status === "over")) {
+          const next = (snapshots[0].seed + 1) | 0;
+          applyAll((c) => c.setSeed(next));
         }
-        pair.jev.start();
-        pair.llm.start();
+        applyAll((c) => c.start());
       },
-      pause: () => applyBoth((c) => c.pause()),
+      pause: () => applyAll((c) => c.pause()),
       reset: () => {
-        const next = (pair.jev.getSnapshot().seed + 1) | 0;
-        pair.jev.setSeed(next);
-        pair.llm.setSeed(next);
+        const next = (trio.jev.getSnapshot().seed + 1) | 0;
+        applyAll((c) => c.setSeed(next));
       },
     };
-  }, [pair]);
+  }, [trio]);
 
-  return { jev, llm, session };
+  return { jev, laya, llm, session };
 }

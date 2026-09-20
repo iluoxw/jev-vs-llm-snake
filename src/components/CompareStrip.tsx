@@ -1,60 +1,91 @@
 import type { Snapshot } from "../game/controller.ts";
+import { PLAYER_META, type Player } from "../game/players.ts";
 import { formatUsd } from "./StatusCard.tsx";
 
 const pad = (n: number, width: number) => String(n).padStart(width, "0");
+const PLAYERS: Player[] = ["jev", "laya", "llm"];
 
 type Better = "higher" | "lower" | "none";
 
-function lead(jev: number, llm: number, better: Better): "jev" | "llm" | "tie" {
-  if (better === "none" || jev === llm) return "tie";
-  if (better === "higher") return jev > llm ? "jev" : "llm";
-  return jev < llm ? "jev" : "llm";
+function lead(values: Record<Player, number>, better: Better): Player | "tie" {
+  if (better === "none") return "tie";
+  let best = PLAYERS[0];
+  for (const id of PLAYERS) {
+    if (better === "higher" ? values[id] > values[best] : values[id] < values[best]) best = id;
+  }
+  return PLAYERS.filter((id) => values[id] === values[best]).length === 1 ? best : "tie";
 }
 
 function Metric({
   label,
-  jev,
-  llm,
+  values,
   better,
   format,
 }: {
   label: string;
-  jev: number;
-  llm: number;
+  values: Record<Player, number>;
   better: Better;
   format: (n: number) => string;
 }) {
-  const winner = lead(jev, llm, better);
+  const winner = lead(values, better);
   return (
     <div className={`vs-cell lead-${winner}`}>
       <div className="eyebrow">{label}</div>
-      <div className="vs-pair">
-        <b className={`jev ${winner === "jev" ? "ahead" : ""}`}>{format(jev)}</b>
-        <span>对</span>
-        <b className={`llm ${winner === "llm" ? "ahead" : ""}`}>{format(llm)}</b>
+      <div className="vs-triple">
+        {PLAYERS.map((id) => (
+          <b key={id} className={`${id} ${winner === id ? "ahead" : ""}`}>
+            <small>{PLAYER_META[id].short}</small>
+            {format(values[id])}
+          </b>
+        ))}
       </div>
     </div>
   );
 }
 
-export function CompareStrip({ jev, llm }: { jev: Snapshot; llm: Snapshot }) {
-  const jevAvg = jev.stats.answered > 0 ? jev.stats.totalLatencyMs / jev.stats.answered : Number.POSITIVE_INFINITY;
-  const llmAvg = llm.stats.answered > 0 ? llm.stats.totalLatencyMs / llm.stats.answered : Number.POSITIVE_INFINITY;
+function avgLatency(s: Snapshot) {
+  return s.stats.answered > 0 ? s.stats.totalLatencyMs / s.stats.answered : Number.POSITIVE_INFINITY;
+}
 
+export function CompareStrip({ jev, laya, llm }: { jev: Snapshot; laya: Snapshot; llm: Snapshot }) {
   return (
     <div className="vs-strip">
-      <Metric label="分数" jev={jev.game.score * 100} llm={llm.game.score * 100} better="higher" format={(n) => pad(n, 4)} />
-      <Metric label="长度" jev={jev.game.snake.length} llm={llm.game.snake.length} better="higher" format={(n) => pad(n, 2)} />
-      <Metric label="步数" jev={jev.game.steps} llm={llm.game.steps} better="none" format={(n) => pad(n, 3)} />
-      <Metric label="超时" jev={jev.stats.late} llm={llm.stats.late} better="lower" format={(n) => String(n)} />
+      <Metric
+        label="分数"
+        values={{ jev: jev.game.score * 100, laya: laya.game.score * 100, llm: llm.game.score * 100 }}
+        better="higher"
+        format={(n) => pad(n, 4)}
+      />
+      <Metric
+        label="长度"
+        values={{ jev: jev.game.snake.length, laya: laya.game.snake.length, llm: llm.game.snake.length }}
+        better="higher"
+        format={(n) => pad(n, 2)}
+      />
+      <Metric
+        label="步数"
+        values={{ jev: jev.game.steps, laya: laya.game.steps, llm: llm.game.steps }}
+        better="none"
+        format={(n) => pad(n, 3)}
+      />
+      <Metric
+        label="超时"
+        values={{ jev: jev.stats.late, laya: laya.stats.late, llm: llm.stats.late }}
+        better="lower"
+        format={(n) => String(n)}
+      />
       <Metric
         label="平均延迟"
-        jev={jevAvg}
-        llm={llmAvg}
+        values={{ jev: avgLatency(jev), laya: avgLatency(laya), llm: avgLatency(llm) }}
         better="lower"
         format={(n) => (Number.isFinite(n) ? `${Math.round(n)} ms` : "—")}
       />
-      <Metric label="估算费用" jev={jev.stats.totalUsd} llm={llm.stats.totalUsd} better="lower" format={(n) => formatUsd(n)} />
+      <Metric
+        label="估算费用"
+        values={{ jev: jev.stats.totalUsd, laya: laya.stats.totalUsd, llm: llm.stats.totalUsd }}
+        better="lower"
+        format={(n) => formatUsd(n)}
+      />
     </div>
   );
 }

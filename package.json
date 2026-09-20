@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev:all": "bash scripts/dev-all.sh",
     "dev:server": "tsx watch --env-file=.env server/index.ts",
     "dev:web": "vite",
     "build": "vite build",

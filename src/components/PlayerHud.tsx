@@ -4,9 +4,15 @@ import { PLAYER_META } from "../game/players.ts";
 import { describeMove } from "../llm/prompt.ts";
 import { ARROW, DIR_LABEL, formatUsd, pct } from "./StatusCard.tsx";
 
-function copy(decision: Decision | null, snapshot: Snapshot) {
+function copy(decision: Decision | null, snapshot: Snapshot, ready: boolean | null) {
   const { status, player } = snapshot;
   const meta = PLAYER_META[player];
+  if (ready === false && status !== "over" && status !== "running") {
+    return {
+      title: meta.offline,
+      sub: player === "laya" ? "服务起来后这一列才会出校准概率" : meta.api,
+    };
+  }
   if (status === "over") {
     return snapshot.game.won
       ? { title: meta.won, sub: `长度 ${snapshot.game.snake.length} · ${snapshot.game.steps} 步` }
@@ -26,11 +32,12 @@ function copy(decision: Decision | null, snapshot: Snapshot) {
         sub: [
           decision.latencyMs != null ? `往返 ${decision.latencyMs} ms` : null,
           decision.upstreamMs != null ? `接口 ${decision.upstreamMs} ms` : null,
-          decision.inputTokens != null || decision.outputTokens != null
+          player !== "laya" && (decision.inputTokens != null || decision.outputTokens != null)
             ? `入 ${decision.inputTokens ?? "—"} / 出 ${decision.outputTokens ?? "—"}`
             : null,
           decision.confidence != null ? `置信 ${Math.round(decision.confidence * 100)}%` : null,
-          decision.estimatedUsd != null ? formatUsd(decision.estimatedUsd) : null,
+          player === "llm" ? "概率非校准" : null,
+          player === "laya" ? "费用 $0" : decision.estimatedUsd != null ? formatUsd(decision.estimatedUsd) : null,
         ]
           .filter(Boolean)
           .join(" · "),
@@ -47,11 +54,12 @@ function copy(decision: Decision | null, snapshot: Snapshot) {
   }
 }
 
-export function PlayerHud({ snapshot }: { snapshot: Snapshot }) {
-  const { decision, game } = snapshot;
-  const { title, sub } = copy(decision, snapshot);
+export function PlayerHud({ snapshot, ready = null }: { snapshot: Snapshot; ready?: boolean | null }) {
+  const { decision, game, player } = snapshot;
+  const { title, sub } = copy(decision, snapshot, ready);
   const options = decision?.options ?? analyze(game);
   const settled = decision !== null && decision.phase !== "deciding";
+  const showProb = player !== "llm";
 
   return (
     <footer className="player-hud">
@@ -71,9 +79,9 @@ export function PlayerHud({ snapshot }: { snapshot: Snapshot }) {
                   {ARROW[o.dir]} {DIR_LABEL[o.dir]}
                 </span>
                 <span className="bar">
-                  <i style={{ width: `${(p ?? 0) * 100}%` }} />
+                  <i style={{ width: `${showProb ? (p ?? 0) * 100 : picked ? 100 : 0}%` }} />
                 </span>
-                <span className="bar-value">{decision ? pct(p) : "—"}</span>
+                <span className="bar-value">{decision ? (showProb ? pct(p) : picked ? "采用" : "—") : "—"}</span>
               </div>
               <div className="option-facts">{describeMove(o)}</div>
             </div>

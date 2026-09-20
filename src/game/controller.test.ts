@@ -54,6 +54,9 @@ describe("GameController", () => {
       error: null,
     });
     expect(s.history[0].options).toContain("up");
+    expect(s.history[0].judged).toBe(true);
+    expect(s.history[0].boardKey.length).toBeGreaterThan(0);
+    expect(s.history[0].oracle).toBeTruthy();
     expect(s.history[0].at).toBeGreaterThan(0);
     expect(s.lastModel).toBe("llm-test");
     expect(s.stats).toMatchObject({
@@ -128,6 +131,21 @@ describe("GameController", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(c.getSnapshot().player).toBe("jev");
     expect(c.getSnapshot().history[0].source).toBe("jev");
+    c.dispose();
+  });
+
+  it("tags applied moves for laya", async () => {
+    const c = new GameController({
+      decide: delayed("up", 300),
+      player: "laya",
+      tickMs: 1000,
+      seed: 1,
+      now: Date.now,
+    });
+    c.start();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(c.getSnapshot().player).toBe("laya");
+    expect(c.getSnapshot().history[0].source).toBe("laya");
     c.dispose();
   });
 

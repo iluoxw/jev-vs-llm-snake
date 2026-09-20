@@ -2,6 +2,7 @@ import type { Decide } from "../decide/client.ts";
 import { PRESETS } from "../llm/prompt.ts";
 import { type MoveFacts, analyze, fallbackMove } from "./analysis.ts";
 import { type Dir, type GameState, createGame, step } from "./engine.ts";
+import { boardKey, oracleMove } from "./oracle.ts";
 import type { Player } from "./players.ts";
 
 export type Status = "idle" | "running" | "paused" | "over";
@@ -41,6 +42,19 @@ export interface HistoryEntry {
   outputTokens: number | null;
   estimatedUsd: number | null;
   error: string | null;
+  /** Board fingerprint before this move. Same key = still the same position. */
+  boardKey: string;
+  facts: Array<{
+    dir: Dir;
+    reachable: number;
+    deadEnd: boolean;
+    foodDistance: number | null;
+    eats: boolean;
+  }>;
+  oracle: Dir | null;
+  /** null when the move was forced / late / error — not a model judgment. */
+  oracleMatch: boolean | null;
+  judged: boolean;
 }
 
 export interface Stats {
@@ -122,7 +136,7 @@ export class GameController {
       status: "idle",
       tickMs: options.tickMs ?? 1200,
       tickStartedAt: 0,
-      strategy: PRESETS["求稳"],
+      strategy: PRESETS["贪吃"],
       seed: this.seed,
       decision: null,
       history: [],
@@ -299,6 +313,8 @@ export class GameController {
     const played = this.pending ?? { dir: fallbackMove(game), source: "late" as const };
     const answered = played.source === this.player;
     const latencyMs = answered ? (decision?.latencyMs ?? null) : null;
+    const facts = decision?.options ?? analyze(game);
+    const oracle = oracleMove(facts, this.snapshot.strategy);
     const next = step(game, played.dir);
     const entry: HistoryEntry = {
       step: next.steps,
@@ -308,13 +324,24 @@ export class GameController {
       latencyMs,
       length: next.snake.length,
       at: Date.now(),
-      options: decision?.options.map((o) => o.dir) ?? [],
+      options: facts.map((o) => o.dir),
       probabilities: answered ? (decision?.probabilities ?? {}) : {},
       model: answered ? (decision?.model ?? null) : null,
       inputTokens: answered ? (decision?.inputTokens ?? null) : null,
       outputTokens: answered ? (decision?.outputTokens ?? null) : null,
       estimatedUsd: answered ? (decision?.estimatedUsd ?? null) : null,
       error: played.source === "error" ? (decision?.error ?? null) : null,
+      boardKey: boardKey(game),
+      facts: facts.map((o) => ({
+        dir: o.dir,
+        reachable: o.reachable,
+        deadEnd: o.deadEnd,
+        foodDistance: o.foodDistance,
+        eats: o.eats,
+      })),
+      oracle,
+      oracleMatch: answered && oracle != null ? played.dir === oracle : null,
+      judged: answered,
     };
     const over = !next.alive || next.won;
     this.set({

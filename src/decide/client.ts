@@ -30,4 +30,5 @@ export function createDecide(path: string): Decide {
 }
 
 export const decideJev = createDecide("/api/decide/jev");
+export const decideLaya = createDecide("/api/decide/laya");
 export const decideLlm = createDecide("/api/decide/llm");
