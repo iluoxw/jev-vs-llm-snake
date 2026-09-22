@@ -33,8 +33,8 @@ export const PLAYER_META: Record<
     wait: "等待 Laya 回复",
     late: "Laya 超过截止时间才回复",
     won: "Laya 赢了",
-    api: "本机 Laya · multilingual",
-    offline: "本机未就绪",
+    api: "Laya API · POST /v1/systemone",
+    offline: "接口不可达",
   },
   llm: {
     id: "llm",

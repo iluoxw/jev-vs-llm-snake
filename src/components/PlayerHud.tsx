@@ -10,7 +10,7 @@ function copy(decision: Decision | null, snapshot: Snapshot, ready: boolean | nu
   if (ready === false && status !== "over" && status !== "running") {
     return {
       title: meta.offline,
-      sub: player === "laya" ? "服务起来后这一列才会出校准概率" : meta.api,
+      sub: meta.api,
     };
   }
   if (status === "over") {
@@ -32,12 +32,12 @@ function copy(decision: Decision | null, snapshot: Snapshot, ready: boolean | nu
         sub: [
           decision.latencyMs != null ? `往返 ${decision.latencyMs} ms` : null,
           decision.upstreamMs != null ? `接口 ${decision.upstreamMs} ms` : null,
-          player !== "laya" && (decision.inputTokens != null || decision.outputTokens != null)
+          decision.inputTokens != null || decision.outputTokens != null
             ? `入 ${decision.inputTokens ?? "—"} / 出 ${decision.outputTokens ?? "—"}`
             : null,
           decision.confidence != null ? `置信 ${Math.round(decision.confidence * 100)}%` : null,
           player === "llm" ? "概率非校准" : null,
-          player === "laya" ? "费用 $0" : decision.estimatedUsd != null ? formatUsd(decision.estimatedUsd) : null,
+          decision.estimatedUsd != null ? formatUsd(decision.estimatedUsd) : null,
         ]
           .filter(Boolean)
           .join(" · "),

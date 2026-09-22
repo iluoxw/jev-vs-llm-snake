@@ -1,6 +1,6 @@
 # Jev · Laya · LLM
 
-同一页对照：左侧 Jev，中间本机 Laya，右侧 OpenAI 兼容 LLM。
+同一页对照：左侧 Jev，中间 Laya，右侧 OpenAI 兼容 LLM。
 
 这不是更强的自动蛇。合法方向和事实（距食物距离、洪水填充、死胡同）仍由代码算出。每个模型每拍只选一个方向。超过截止时间就走代码回退（能直行则直行）。
 
@@ -11,6 +11,7 @@
 ```sh
 cp .env.example .env
 # Jev：TYPESAFE_API_KEY
+# Laya：LAYA_URL，可选 LAYA_API_KEY、LAYA_MODEL
 # LLM：OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL
 pnpm install
 pnpm dev               # 网页 http://localhost:5188，代理 http://127.0.0.1:8787
@@ -18,20 +19,7 @@ pnpm dev               # 网页 http://localhost:5188，代理 http://127.0.0.1:
 
 密钥只放在 Hono 代理里。浏览器分别请求 `/api/decide/jev`、`/api/decide/laya` 和 `/api/decide/llm`。缺某一侧时该列返回 503，其余列仍可跑。
 
-本机加 Laya（Node 跑不了权重）。脚本在 `laya/`，本仓库转发 `127.0.0.1:8790`。权重仍走 Hugging Face 缓存；虚拟环境需已装 `laya` 包（`.env` 里设 `LAYA_VENV`，或放到 `laya/.venv`）：
-
-```sh
-# .env 里可选：LAYA_VENV=/path/to/.venv
-pnpm dev:all           # 先起 Laya:8790，再 pnpm dev
-```
-
-或自己：
-
-```sh
-./laya/serve.sh
-```
-
-本机 macOS 默认 `LAYA_DEVICE=cpu`。走 MPS 时 Metal 可能直接把进程断言杀掉（`IOGPUMetalCommandBuffer`）。纯 CPU 大约几百毫秒到一两秒。缺 Laya 进程时该列 503，另两列照常。
+Laya 只走远程 API，和 Jev 相同的 `POST /v1/systemone`：`state` 加一个名为 `move` 的 `choice` 问题。代理转到 `LAYA_URL`（默认 `https://laya-test.test.seewo.com`）。不传 `model` 时由服务按语言选 checkpoint。有 `LAYA_API_KEY` 时带 `Authorization: Bearer`。接口不可达时该列 503，另两列照常。
 
 ## 看什么
 
@@ -55,8 +43,7 @@ Jev 参考单价可用 `TYPESAFE_INPUT_USD_PER_MTIME` 覆盖。LLM 费用用 `OP
 - `src/game/oracle.ts` — 策略裁判
 - `src/compare/report.ts` — 同局面同向、首次分叉、本局结论
 - `src/llm/prompt.ts` — 三侧共用同一套状态和事实
-- `server/index.ts` — `/api/decide/jev`、`/api/decide/laya`、`/api/decide/llm`
-- `laya/laya_server.py` — 本机 Laya `POST /decide`
+- `server/index.ts` — `/api/decide/jev`、`/api/decide/laya`、`/api/decide/llm`；Laya 转到 `LAYA_URL/v1/systemone`
 - `src/components/` — 共享控件加三列玩家面板
 
 `pnpm test` 与 `pnpm typecheck`。

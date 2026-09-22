@@ -22,7 +22,9 @@ const jevOutputUsd = Number(process.env.TYPESAFE_OUTPUT_USD_PER_MTIME ?? 0);
 const completionsUrl = resolveCompletionsUrl(openaiBase);
 
 const typesafe = jevKey ? new TypeSafeClient() : null;
-const layaUrl = (process.env.LAYA_URL ?? "http://127.0.0.1:8790").replace(/\/+$/, "");
+const layaUrl = (process.env.LAYA_URL ?? "https://laya-test.test.seewo.com").replace(/\/+$/, "");
+const layaModel = process.env.LAYA_MODEL?.trim() ?? "";
+const layaKey = process.env.LAYA_API_KEY?.trim() ?? "";
 
 if (!jevKey) console.warn("未配置 TYPESAFE_API_KEY，/api/decide/jev 将返回 503。");
 if (!openaiKey || !openaiModel) console.warn("未配置 OPENAI_API_KEY / OPENAI_MODEL，/api/decide/llm 将返回 503。");
@@ -94,13 +96,28 @@ function prepareDecide(body: unknown) {
   }
 }
 
+function layaHeaders(json: boolean): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (json) headers["Content-Type"] = "application/json";
+  if (layaKey) headers.Authorization = `Bearer ${layaKey}`;
+  return headers;
+}
+
 async function layaReady() {
-  try {
-    const res = await fetch(`${layaUrl}/health`, { signal: AbortSignal.timeout(400) });
-    return res.ok;
-  } catch {
-    return false;
+  const paths = ["/healthz", "/readyz", "/v1/models"];
+  for (const path of paths) {
+    try {
+      const res = await fetch(`${layaUrl}${path}`, {
+        headers: layaHeaders(false),
+        signal: AbortSignal.timeout(800),
+      });
+      if (res.ok) return true;
+      if (res.status !== 404 && res.status !== 405) return false;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 app.get("/api/health", async (c) =>
@@ -218,41 +235,62 @@ app.post("/api/decide/laya", async (c) => {
   const { legal, request } = prepared;
   const started = performance.now();
   try {
-    const res = await fetch(`${layaUrl}/decide`, {
+    const wire: {
+      state: typeof request.state;
+      questions: { move: { type: "choice"; instructions: string; criteria: typeof request.criteria } };
+      model?: string;
+    } = {
+      state: request.state,
+      questions: {
+        move: {
+          type: "choice",
+          instructions: request.instructions,
+          criteria: request.criteria,
+        },
+      },
+    };
+    if (layaModel) wire.model = layaModel;
+    const res = await fetch(`${layaUrl}/v1/systemone`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        state: request.state,
-        instructions: request.instructions,
-        criteria: request.criteria,
-      }),
+      headers: layaHeaders(true),
+      body: JSON.stringify(wire),
       signal: mergeSignals(c.req.raw.signal, 5000),
     });
     const payload = (await res.json().catch(() => null)) as {
       detail?: string;
-      error?: string;
-      choice?: unknown;
-      probabilities?: Partial<Record<Dir, number>>;
-      confidence?: number | null;
+      error?: string | { message?: string };
       model?: string;
-      upstreamMs?: number;
+      answers?: {
+        move?: {
+          choice?: unknown;
+          probabilities?: Partial<Record<Dir, number>>;
+          confidence?: number | null;
+        };
+      };
+      usage?: { input_tokens?: number; output_tokens?: number };
     } | null;
     if (res.status === 404 || res.status === 502 || res.status === 503) {
-      return c.json({ error: "未启动 Laya 服务" }, 503);
+      return c.json({ error: "Laya 接口不可达" }, 503);
     }
     if (!res.ok) {
-      throw new Error(payload?.detail ?? payload?.error ?? `upstream HTTP ${res.status}`);
+      const errText =
+        typeof payload?.error === "string"
+          ? payload.error
+          : payload?.error?.message ?? payload?.detail ?? `upstream HTTP ${res.status}`;
+      throw new Error(errText);
     }
-    const chosen = typeof payload?.choice === "string" ? (payload.choice as Dir) : null;
+    const move = payload?.answers?.move;
+    const chosen = typeof move?.choice === "string" ? (move.choice as Dir) : null;
     if (!chosen || !legal.includes(chosen)) return c.json({ error: "返回了非法方向" }, 502);
+    const inputTokens = typeof payload?.usage?.input_tokens === "number" ? payload.usage.input_tokens : null;
     const result: DecideResult = {
       choice: chosen,
-      probabilities: payload?.probabilities ?? {},
-      confidence: typeof payload?.confidence === "number" ? payload.confidence : null,
-      model: typeof payload?.model === "string" ? payload.model : "laya",
+      probabilities: move?.probabilities ?? {},
+      confidence: typeof move?.confidence === "number" ? move.confidence : null,
+      model: typeof payload?.model === "string" ? payload.model : layaModel || "laya",
       upstreamMs: Math.round(performance.now() - started),
-      inputTokens: null,
-      outputTokens: null,
+      inputTokens,
+      outputTokens: typeof payload?.usage?.output_tokens === "number" ? payload.usage.output_tokens : null,
       estimatedUsd: 0,
     };
     return c.json(result);
@@ -260,8 +298,8 @@ app.post("/api/decide/laya", async (c) => {
     if (c.req.raw.signal.aborted) return c.body(null, 499 as never);
     const message = err instanceof Error ? err.message : String(err);
     console.error("[decide/laya]", message);
-    if (message.includes("fetch") || message.includes("ECONNREFUSED")) {
-      return c.json({ error: "未启动 Laya 服务" }, 503);
+    if (/fetch|ECONNREFUSED|ENOTFOUND|timed out|Timeout/i.test(message)) {
+      return c.json({ error: "Laya 接口不可达" }, 503);
     }
     return c.json({ error: "Laya 决策失败" }, 502);
   }
@@ -276,6 +314,6 @@ app.post("/api/decide", (c) => {
 const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
   console.log(
-    `jev-vs-llm-snake proxy listening on http://127.0.0.1:${port} · llm ${completionsUrl} · model ${openaiModel ?? "(unset)"} · laya ${layaUrl}`,
+    `jev-vs-llm-snake proxy listening on http://127.0.0.1:${port} · llm ${completionsUrl} · model ${openaiModel ?? "(unset)"} · laya ${layaUrl}/v1/systemone`,
   );
 });

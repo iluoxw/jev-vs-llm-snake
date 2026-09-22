@@ -6,7 +6,4 @@ dist
 *.log
 .DS_Store
 .remember
-.venv
-__pycache__/
-*.pyc
 
